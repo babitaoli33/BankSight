@@ -8,3 +8,4 @@ data/cleaned/
 data/sample/
 .pytest_cache/
 .env
+data/chroma/
