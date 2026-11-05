@@ -5,3 +5,6 @@ __pycache__/
 .vscode/
 data/raw/
 data/cleaned/
+data/sample/
+.pytest_cache/
+.env

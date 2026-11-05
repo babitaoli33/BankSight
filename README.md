@@ -20,6 +20,56 @@ Power BI dashboard designed for a business audience.
 
 Full write-up: [`reports/ANALYSIS_REPORT.md`](reports/ANALYSIS_REPORT.md) for the analyst report, or [`reports/FINDINGS_PLAIN_LANGUAGE.md`](reports/FINDINGS_PLAIN_LANGUAGE.md) for findings and recommendations in plain language.
 
+## Ask BankSight: AI Assistant (RAG + Text-to-SQL)
+
+`assistant/` adds a plain-English question-answering layer on top of the analysis.
+A business user asks a question; the assistant retrieves the most relevant
+findings and example queries from this repo, writes a SQL query, runs it safely,
+and answers with numbers from the result plus citations.
+
+```mermaid
+flowchart LR
+    Q[Question] --> R[Retrieve<br/>similar SQL examples<br/>+ relevant findings]
+    R --> G[LLM writes one SELECT]
+    G --> S{SQL guard<br/>read-only DB}
+    S -- error --> G
+    S -- rows --> A[LLM answers from<br/>result + findings]
+    A --> O[Answer with citations]
+```
+
+```
+$ python -m assistant ask "Which merchants bring in the most transaction value?" --show-sql
+$ python -m assistant ask "Why should the bank care that customers hold few products?"
+```
+
+**How it works**
+
+- **Retrieval (RAG):** `sql/queries.sql` is split into business-question/query pairs, and `reports/FINDINGS.md` into sections. TF-IDF search pulls the 3 closest example queries and 2 closest findings for each question.
+- **Grounded SQL generation:** the model sees the live database schema, including the allowed values of short text columns such as `account_type`, plus the retrieved examples as few-shot guidance, so it uses the real table and column names.
+- **Safety:** only a single `SELECT`/`WITH` statement is accepted. The database is opened read-only, and every query has a row cap and a time limit. A model that tries `DELETE` or `DROP` is blocked, which the tests check.
+- **Self-correction:** if a query fails (for example, a wrong column name), the error goes back to the model once so it can fix the query.
+- **No SQL when not needed:** questions about meaning or recommendations are answered from the findings alone.
+- **Evaluation:** `python -m assistant eval` measures *execution accuracy*: the generated query and a hand-written gold query must return the same values.
+
+**Running it**
+
+```
+pip install -r requirements.txt
+python -m pytest -q                       # 24 tests, offline
+python -m assistant ask "What is our card product mix?" --show-sql   # offline mock model
+
+# With a real model
+set ANTHROPIC_API_KEY=...                 # PowerShell: $env:ANTHROPIC_API_KEY="..."
+python -m assistant --provider anthropic ask "Which account type holds the most balance?" --show-sql
+python -m assistant --provider anthropic eval
+```
+
+The assistant uses the Kaggle database at `data/raw/banking_dataset_kaggle/data/database/bank_sqlite.db`
+when it is present. Otherwise it generates a small sample database with the same core tables
+(`python -m assistant.sample_db`), so tests and CI run without the 650MB download.
+The offline mock model reuses the best retrieved example query; it scores 5 of 6 on
+the eval because the remaining question needs new SQL that only a real model can write.
+
 ## Dashboard
 
 `BankSight-Dashboard.pbix` is a three-page Power BI dashboard built on a relational
@@ -34,6 +84,14 @@ Static chart exports are in [`figures/`](figures/).
 ## Repository Structure
 
 ```
+├── assistant/                       # Ask BankSight: RAG + text-to-SQL assistant
+│   ├── agent.py                    # retrieve -> write SQL -> run safely -> answer
+│   ├── knowledge.py                # retrieval over findings and example queries
+│   ├── sql_guard.py                # SELECT-only validation, read-only execution
+│   ├── llm.py                      # Anthropic / OpenAI / offline mock clients
+│   ├── evaluate.py                 # execution-accuracy evaluation
+│   └── sample_db.py                # small sample DB for tests and demos
+├── tests/                           # pytest suite for the assistant
 ├── notebooks/
 │   └── banking_analysis.ipynb      # Full narrated SQL + Python analysis
 ├── src/                             # Reproducible analysis scripts
@@ -70,6 +128,7 @@ scripts in `src/` in order regenerates everything under `data/cleaned/`, includi
 - Python: pandas, sqlite3, matplotlib, seaborn, feature engineering (Customer 360 rollup, engagement scoring)
 - Power BI: data modeling (relationships, cardinality), DAX calculated columns, a three-page executive dashboard
 - Analysis technique: testing an assumption before building on it (checking whether credit score actually predicts interest rate, checking distribution shape before choosing an anomaly detection method), customer segmentation by value and engagement rather than risk alone
+- AI / LLM: retrieval-augmented generation, text-to-SQL, few-shot prompting, guardrails on model-written SQL, self-correction, execution-accuracy evaluation, Anthropic and OpenAI APIs
 - Communication: findings written with business meaning and a recommendation attached to each one, for both technical and non-technical audiences
 
 ## Reproducing This Analysis
